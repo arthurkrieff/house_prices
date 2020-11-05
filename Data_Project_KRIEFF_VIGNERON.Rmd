@@ -1,0 +1,1102 @@
+---
+title: "Data Analysis Project"
+author: "Arthur Krieff & Marc Vigneron"
+date: "22/12/2019"
+output: pdf_document
+geometry: margin=0.7in
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include=FALSE, warning=FALSE, message = FALSE, cache=TRUE)
+```
+
+# Introduction
+This project is about the implementation on a real data set of the regression methods we reviewed in the course MAP535. The data set is taken from Kaggle competition House Prices: Advanced Regression Techniques. The goal of the project is to predict the price of houses from the testing set and to find out which are the most influent variables on the Sale price.
+
+# Exploratory Data Analysis / Initial Modelling
+```{r}
+load('DataProject.RData')
+library(dplyr)
+```
+
+```{r}
+
+train_factor <- train[, sapply(train, class) == 'factor']
+dim(train_factor)
+
+train_numeric <- train[, sapply(train, class) == 'numeric']
+train_numeric <- subset(train_numeric, select = -c(Id, SalePrice))
+dim(train_numeric)
+
+target <- train$SalePrice
+train <- subset(train, select=-c(Id))
+```
+
+The data we are provided with has 1095 observations and 68 variables. Of those 68, 39 are categorical variables while 28 are numerical (+ the target).
+
+```{r}
+library(ggplot2)
+ggplot(train, aes(train$SalePrice)) + geom_histogram(aes(train$SalePrice), alpha = 0.5, fill = "darkcyan", color = "darkcyan") + xlab("SalePrice") + ggtitle("Histogram of the SalePrice")
+```
+
+With the help of an histogram, we observe that our target is right-skewed. Therefore, we log-transform it. 
+
+```{r}
+log_target <- as.data.frame(log(target))
+train$SalePrice <- log(train$SalePrice)
+```
+
+
+```{r, echo=FALSE, include=TRUE, out.width = '50%', fig.align='center'}
+par(mar=c(2,2,2,2))
+ggplot(data=log_target, aes(x=log_target$`log(target)`, y=log_target$`log(target)`)) +
+  geom_boxplot(fill = "wheat", color = "tomato4") +
+  ggtitle("Boxplot of log_target") +
+  xlab(" ") +
+  ylab("log_SalePrice")
+```
+
+The boxplot of the transformed target shows many outliers. We will deal with these observations later on. 
+
+## I. Numerical variables
+
+First, let's focus on the 27 numerical variables (we do not consider the 'Id' variable). We notice that all provided observations are standardized and scaled. We use boxplots, histograms and other graphical and numerical tools to visualize the data.
+
+```{r, fig.width=15, fig.height=15, fig.show='hold',fig.align='center'}
+library(tidyr)
+df <- data.frame(train_numeric)
+
+ggplot(gather(df),aes(value))+
+  geom_boxplot(aes(x = key, y = value), fill = "powderblue", color = "darkcyan", alpha=0.5)+
+  facet_wrap(~key, scales = 'free_x')
+```
+
+```{r, fig.width=15, fig.height=15, fig.show='hold',fig.align='center'}
+# Histograms
+ggplot(gather(df),aes(value))+
+  geom_histogram(aes(value), fill = "deepskyblue", color = "blue4", alpha = 0.5)+
+  facet_wrap(~key, scales = 'free_x')
+```
+
+```{r}
+# Skewness
+library(moments)
+sapply(train_numeric, function(x) skewness(x))
+```
+
+```{r, fig.width=15, fig.height=15, fig.show='hold',fig.align='center'}
+# QQ-plots
+ggplot(gather(df), aes(sample = value)) + stat_qq() + stat_qq_line() +
+  facet_wrap(~key, scales = "free")
+```
+
+
+We observe that: \
+  - Some of those are heavily skewed ('BsmtHalfBath' and 'YearBuilt') ; \
+  - Few seem Gaussian: only 'GrLivArea' and '1stFlrSF' look Gaussian.
+
+```{r, echo=FALSE, include=TRUE, out.width = '50%', fig.align='center'}
+library(corrplot)
+corrplot::corrplot(cor(train_numeric), method="ellipse")
+```
+
+Then, we examine the correlations of the numerical variables with a correlation-plot. We find that many pairs seem highly correlated, for instance: \
+  - 'GrLivArea' and 'TotRmsAbvGrd' (correlation of 0.83) \
+  - 'GarageYrBlt' and 'YearBuilt' (correlation of 0.82) \
+  - 'GarageCars' and 'GarageArea' (correlation of 0.89)
+
+```{r}
+cor(train_numeric$GrLivArea, train_numeric$TotRmsAbvGrd)
+cor(train_numeric$GarageYrBlt, train_numeric$YearBuilt)
+cor(train_numeric$GarageCars, train_numeric$GarageArea)
+```
+
+We are also interested in how each covariate is correlated to our target.
+
+```{r}
+correlations <- as.data.frame(cor(cbind(train_numeric, log_target)))
+corr_Price <- correlations[,ncol(correlations),drop=FALSE]
+colnames(corr_Price) <- "Correlation_SalePrice"
+corr_Price <- corr_Price[order(-corr_Price$Correlation_SalePrice),,drop=FALSE]
+corr_Price <- corr_Price[-1,, drop=FALSE]
+```
+
+```{r, echo=FALSE, include=TRUE, out.width = '60%', fig.align='center'}
+library(knitr)
+kable(corr_Price[1:11,,drop=FALSE])
+```
+
+When looking at the correlation of log_target with the numerical variables, we note that approximately $11$ variables are highly correlated (correlation higher than $0.5$). Recall that many of these $11$ variables are highly correlate with one another (e.g. 'GarageCars' with 'GarageArea' and 'OverallQual' with 'GrLivArea').
+
+## II. Categorical variables
+We now move onto the $39$ categorical variables. 
+
+```{r}
+summary(train_factor)
+```
+
+```{r}
+for (i in 1:ncol(train_factor)){
+  print(
+    ggplot(data=train_factor, aes(x = train_factor[[i]] , y=log_target$`log(target)`)) +
+      geom_boxplot() +
+      geom_jitter(alpha=0.5) +
+      ggtitle(colnames(train_factor)[i]) +
+      xlab(colnames(train_factor)[i]) +
+      ylab("SalePrice")
+    )
+}
+```
+
+We first observe that the plan is unbalanced. For several factors, note that some modalities are present a very low number of times, such as 'Utilities', 'Street', 'RoofMatl' , 'Heating' and 'Condition2'. Furthermore, according to the boxplots, the SalePrice value for these rare modalities is not very different from the mean. Therefore, we decide to delete these factors. 
+
+```{r}
+train <- subset(train, select=-c(Utilities, Street,RoofMatl, Heating, Condition2))
+```
+
+Then considering each categorical variable against log_target, we note with boxplots that some variables seem to have a great impact on log_target: for example 'MSSubClass', 'KitchenQual', 'CentralAir' and 'Neighborhood'.
+
+Now, let's try to check the interactions between our factors and some numerical variables. We focus on the two numerical variables the most correlated with the log_SalePrice: GrLivArea and OverallQual. 
+
+```{r}
+# Interaction with GrLivArea
+library(ggplot2)
+for (i in 1:ncol(train_factor)){
+  print(
+    ggplot(data=train, aes(x=GrLivArea, y=SalePrice, color=train_factor[[i]])) +
+      geom_smooth(method='lm') +
+      ggtitle(colnames(train_factor)[i])
+    )
+}
+```
+
+```{r}
+# Interaction with OverallQual
+library(ggplot2)
+for (i in 1:ncol(train_factor)){
+  print(
+    ggplot(data=train, aes(x=OverallQual, y=SalePrice, color=train_factor[[i]])) +
+      geom_smooth(method='lm') +
+      ggtitle(colnames(train_factor)[i])
+    )
+}
+```
+
+After analyzing the linear regression plots based on the different factors and the two covariates (i.e. OverallQual and GrLivArea), we started building our intuitions as to their interactions with one another. For instance, it seems that, depending on the Neighboorhood, the GrLivArea has a higher or lower impact on the (log) SalePrice. This kind of interaction (difference in the slope coefficient) was also observered for the following couples of variables (non-exhaustive list): 
+
+\underline{Interaction with OverallQual}: Neighborhood, BsmtCond, CentralAir and Functional. \
+\underline{Interaction with GrLivArea}: MSSubClass, LandContour, ExterCond and BsmtFinType1.
+
+# Modelling and Diagnostics
+
+## I. Linear models
+
+### 1. Without penalization
+
+We start by building a multivariate linear regression model, taking into account all of the variables. However, we do not consider yet the interactions between the factors and the numerical variables. By default, the model creates dummy variables for our factors. 
+
+```{r}
+options(max.print=10000)
+mod <- lm(SalePrice ~ ., data=train)
+summary(mod)
+```
+This model shows an Adjusted R-squared of $0.9163$. Overall, there are $214$ coefficients. Many variables have a very low p-value such as : Intercept, LotArea, OverallQual, OverallCond and GrLivArea for instance. However, we cannot trust this p-value as it does not take into account the correlations among the variables. For example, TotRmsAbvGr is highly correlated with the log SalePrice but the p-value is very high. This is because TotRmsAbvGr is also highly correlated with GrLivArea. 
+
+We can also notice that the p-value of the global Fisher Test is extremely low, so the test indicates that this model contains at least one variable that is relevant to explain the target. 
+
+The next logical step would be to select a smaller model where all (or almost all) variables are relevant since we have a lot of variables which the t-test seems to disqualify. 
+
+### 2. AIC/BIC criteria
+
+To do so, let us perform a step-wise search with the AIC and BIC criteria.
+
+```{r}
+library(MASS)
+
+# AIC
+mod_AIC <- stepAIC(mod, direction="both", trace=FALSE)
+summary(mod_AIC)
+
+# BIC
+mod_BIC <- stepAIC(mod, direction="both", k=log(nrow(train)), trace=FALSE)
+summary(mod_BIC)
+```
+
+\underline{AIC Criterion}: the model selected is now much smaller than the previous one. The Adjusted R-squared is even higher: $0.9177$. With the intercept, this model uses $138$ coefficients. We can notice that highly correlated variables have now disappeared: for instance, out of the highly correlated pair TotRmsAbvGr and GrLivArea, only GrLivArea remains.
+
+\underline{BIC Criterion}: with this criterion, the model selected much less variables ($25$ coefficients). The Adjusted R-squared is a little bit smaller ($0.8883$) and all of the variables appear to be very significant according to the t-test.
+
+Since it is hard to select one of the two models, let's try them on the testing set and see the performance.
+
+```{r}
+library(MLmetrics)
+
+# AIC predicted values
+mod_AIC$xlevels[["Neighborhood"]] <- union(mod_AIC$xlevels[["Neighborhood"]], levels(test[["Neighborhood"]]))
+mod_AIC$xlevels[["Heating"]] <- union(mod_AIC$xlevels[["Heating"]], levels(test[["Heating"]]))
+AIC_pred <- predict(mod_AIC, test)
+
+print(R2_Score(AIC_pred, log(test$SalePrice)))
+
+# BIC predicted values
+BIC_pred <- predict(mod_BIC, test)
+
+print(R2_Score(BIC_pred, log(test$SalePrice)))
+```
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::kable(data.frame("AIC" = R2_Score(AIC_pred, log(test$SalePrice)), "BIC" = R2_Score(BIC_pred, log(test$SalePrice)), row.names = "R2 Score (testing set)"))
+```
+
+While the BIC model shows a very good R2 score, the AIC model is clearly overfitting. Therfore, let's build new models that add a penalization term. 
+
+### 3. LASSO
+
+```{r}
+library(lasso2)
+library(caret)
+library(glmnet)
+
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+lasso <- train(SalePrice ~ ., train, method='glmnet', tuneGrid=expand.grid(alpha=1,lambda=seq(0.001,0.010,0.001)),trControl=custom)
+lasso
+```
+
+```{r}
+# Summary of the coefficients
+coeffs <- coef(lasso$finalModel, lasso$bestTune$lambda)
+Beta <- c()
+row_names <- c()
+count <- 0
+for (i in 1:length(coeffs)){
+  if (coeffs[i] !=0){
+    row_names <- c(row_names, rownames(coeffs)[i])
+    Beta <- c(Beta, coeffs[i])
+    count <- count + 1
+  }
+}
+
+count
+```
+
+First, we try the LASSO penalization on all our variables, still without taking into account the interaction terms. The model also selects the best lambda parameter by applying a cross-validation method. The model keeps $92$ coefficients and shows an R2 score of $0.885$ and an RMSE of $0.135$ on the training set.
+
+```{r, include=TRUE, echo=FALSE, out.width = '70%', fig.align='center'}
+coef_table_lasso <- data.frame("Beta" = Beta, row.names = row_names)
+coef_table_lasso <- coef_table_lasso[order(-coef_table_lasso$Beta),,drop=FALSE]
+kable(coef_table_lasso[1:10,,drop=FALSE])
+```
+
+Since our data is standardized, we can easily interpret the importance of a variable based on its coefficient's value. Here, Neighboorhood, GrLivArea  and OverallQual seem to be the ones that best explain the log SalePrice. 
+
+```{r}
+data.frame("R2 Score" = R2_Score(predict(lasso, test), log(test$SalePrice)), row.names = ("LASSO - Testing set"))
+```
+
+```{r}
+lasso$bestTune
+```
+
+Applied on the testing set, the R2 Score is about $0.915$. The best parameter for $\lambda$ is $0.004$.
+
+```{r}
+plot(lasso)
+```
+
+
+### 4. Ridge
+```{r}
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+ridge <- train(SalePrice ~ ., train, method='glmnet', tuneGrid=expand.grid(alpha=0,lambda=seq(0.1,1,0.1)),trControl=custom)
+ridge
+```
+By applying the ridge model, the results on the training set are the following: 
+
+```{r, include=TRUE, echo=FALSE, out.width = '70%', fig.align='center'}
+kable(ridge$results[1,2:4])
+```
+
+```{r}
+# Summary of the coefficients
+coeffs_ridge <- coef(ridge$finalModel, ridge$bestTune$lambda)
+Beta <- c()
+row_names <- c()
+count <- 0
+for (i in 1:length(coeffs_ridge)){
+  if (coeffs_ridge[i] !=0){
+    row_names <- c(row_names, rownames(coeffs_ridge)[i])
+    Beta <- c(Beta, coeffs_ridge[i])
+    count <- count + 1
+  }
+}
+
+count
+```
+
+```{r}
+coef_table_ridge <- data.frame("Beta" = Beta, row.names = row_names)
+coef_table_ridge <- coef_table_ridge[order(-coef_table_ridge$Beta),,drop=FALSE]
+coef_table_ridge[1:10,,drop=FALSE]
+```
+The model considered $216$ non-zero coefficients. Here, the most significant variables are 'Neighborhood', "Condition1" and "SaleTypeCon".
+
+```{r}
+data.frame("R2 Score" = R2_Score(predict(ridge, test), log(test$SalePrice)), row.names = ("RIDGE - Testing set"))
+```
+Applied on the testing set, the R2 Score is about $0.906$.
+
+### 5. Elastic Net
+
+```{r}
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+Elnet <- train(SalePrice ~ ., train, method='glmnet', tuneGrid=expand.grid(alpha=seq(0,1,0.1),lambda=seq(0.01,0.1,0.01)),trControl=custom)
+Elnet
+```
+
+```{r}
+# Summary of the coefficients
+coeffs_elnet <- coef(Elnet$finalModel, Elnet$bestTune$lambda)
+Beta <- c()
+row_names <- c()
+count <- 0
+for (i in 1:length(coeffs_elnet)){
+  if (coeffs_elnet[i] !=0){
+    row_names <- c(row_names, rownames(coeffs_elnet)[i])
+    Beta <- c(Beta, coeffs_elnet[i])
+    count <- count + 1
+  }
+}
+
+count
+```
+The Elastic Net model returns an R2 Score of $0.885$ and an RMSE of $0.135$. These results are associated with $\lambda = 0.02$ and $\alpha = 0.2$. The model ended up keeping $99$ coefficients. 
+
+```{r}
+coef_table_elnet <- data.frame("Beta" = Beta, row.names = row_names)
+coef_table_elnet <- coef_table_elnet[order(-coef_table_elnet$Beta),,drop=FALSE]
+coef_table_elnet[1:10,,drop=FALSE]
+```
+
+Here, the most significant variables are "Neighborhood", "GrLivArea" and "OverallQual", which is consistent with our Exploratory Data Analysis. 
+
+```{r}
+data.frame("R2 Score" = R2_Score(predict(Elnet, test), log(test$SalePrice)), row.names = ("Elastic Net - Testing set"))
+```
+Applied on the testing set, the R2 is about $0.915$.
+
+### 6. PLS (Partial Least Squares)
+
+```{r}
+library(pls)
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+pls <- train(SalePrice ~ ., train, method='pls', tuneLength=20, trControl=custom)
+pls
+```
+By using the PLS model, we now have 14 components, which gives an R2 on the training set of $0.88$. 
+
+```{r}
+plot(pls)
+```
+
+```{r}
+# Predicted values
+R2_Score(predict(pls, test), log(test$SalePrice))
+```
+So far, this is a summary of the performance of our models: 
+
+```{r, include=TRUE, echo=FALSE, out.width = '60%', fig.align='center'}
+knitr::kable(data.frame("Methods on Testing set" = c("Lasso","Ridge","Elastic Net","PLS", "BIC"),
+           "R2 Score" = round(c(R2_Score(predict(lasso, test), log(test$SalePrice)),
+                          R2_Score(predict(ridge, test), log(test$SalePrice)),
+                          R2_Score(predict(Elnet, test), log(test$SalePrice)),
+                          R2_Score(predict(pls, test), log(test$SalePrice)),
+                          R2_Score(BIC_pred, log(test$SalePrice))),digits=3),
+           "RMSE" = round(c(sqrt(mean((predict(lasso, newdata = test)-log(test$SalePrice))^2)),
+                      sqrt(mean((predict(ridge, newdata = test)-log(test$SalePrice))^2)),
+                      sqrt(mean((predict(Elnet, newdata = test)-log(test$SalePrice))^2)),
+                      sqrt(mean((predict(pls, newdata = test)-log(test$SalePrice))^2)),
+                      sqrt(mean((BIC_pred-log(test$SalePrice))^2))),digits=3)))
+```
+
+Overall, the PLS and Lasso models are the ones which perform the best on the testing set. Therefore, we will keep them and discard the others when pursuing our analyses. 
+
+### 7. Adding interaction terms
+
+Now, let's try to complexify our linear models by adding the interaction terms. As seen in the Exploraty Data Analysis, the following interaction terms are worth considering: \
+- OverallQual-Neighborhood \
+- OverallQual-BsmtCond \
+- OverallQual-CentralAir \
+- OverallQual-Functional \
+- GrLivArea-MSSubClass \
+- GrLivArea-LandContour \
+- GrLivArea-ExterCond \
+- GrLivArea-BsmtFinType1 \
+
+To analyse the interaction effects let's build anova tests.
+
+```{r}
+#OverallQual
+interac <- lm(SalePrice ~ OverallQual*(Functional+CentralAir+BsmtCond+Neighborhood), data=train)
+anova(interac)
+```
+
+```{r}
+#GrLivArea
+interac <- lm(SalePrice ~ GrLivArea*(MSSubClass+LandContour+ExterCond+BsmtFinType1), data=train)
+anova(interac)
+```
+According to the anova tests, all these interaction terms are significant except for OverallQual-CentralAir and OverallQual-BsmtCond. Let's try to add them to our models and check the performance. 
+
+**LASSO**
+```{r}
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+lasso2 <- train(SalePrice ~ .+ OverallQual*(Functional+Neighborhood) + GrLivArea*(MSSubClass+LandContour+ExterCond+BsmtFinType1), train, method='glmnet', tuneGrid=expand.grid(alpha=1,lambda=seq(0.001,0.010,0.001)),trControl=custom)
+
+lasso2
+```
+On the training set, the model gives an R2 around 0.89 and an RMSE of 0.132.
+
+```{r}
+lasso2_pred <- predict(lasso2, test)
+score_lasso <- R2_Score(lasso2_pred, log(test$SalePrice))
+rmse_lasso <- RMSE(lasso2_pred, log(test$SalePrice))
+score_lasso
+rmse_lasso
+```
+The R2 score on the testing set is $0.920$, which is the best R2 Score so far. 
+
+**PLS**
+
+```{r}
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+pls2 <- train(SalePrice ~ .+ OverallQual*(Functional+Neighborhood) + GrLivArea*(MSSubClass+LandContour+ExterCond+BsmtFinType1), train, method='pls', tuneLength=20, trControl=custom)
+pls2
+```
+On the training set, the model gives an R2 of $0.887$. 
+```{r}
+score_pls <- R2_Score(predict(pls2, test), log(test$SalePrice))
+rmse_pls <- RMSE(predict(pls2, test), log(test$SalePrice))
+score_pls
+rmse_pls
+```
+Applied on the testing set, the R2 score is about $0.921$. 
+
+Overall, these interaction terms seem to be relevant to our models. 
+
+## II. Non-linear models
+
+### 1. RandomForest Regression
+For our first test of a non-linear model, we choose to perform a RandomForest Regression. 
+
+```{r}
+library(randomForest)
+names(train) <- make.names(names(train))
+names(test) <- make.names(names(test))
+
+#We define here a function to orientate our model tuning: We will use the grid search method
+trControl <- trainControl(method = "cv",
+    number = 10,
+    search = "grid")
+```
+
+First, we ran the model with the default parameters given by R and then improved the model by performing several grid searches that we do not display here for brevity's sake.
+```{r, eval=FALSE, cache=TRUE}
+set.seed(1234)
+# Run the model
+rf_default <- train(SalePrice~.,
+    data = train,
+    method = "rf",
+    metric = "adj.r.squared",
+    trControl = trControl)
+# Print the results
+print(rf_default)
+```
+
+
+```{r, eval=FALSE, cache=TRUE}
+#We will now seach for the best mtry value. We know from the previous chunk that it is around 109, which is why we restrict our gridsearch to the sequence 105:115.
+
+set.seed(1234)
+tuneGrid <- expand.grid(.mtry = c(105: 115))
+rf_mtry <- train(SalePrice~.,
+    data = train,
+    method = "rf",
+    metric = "Rsquared",
+    tuneGrid = tuneGrid,
+    trControl = trControl,
+    importance = TRUE,
+    nodesize = 14,
+    ntree = 300)
+print(rf_mtry)
+
+#RMSE was used to select the optimal model using the smallest value. The final value used for the model was mtry = 113.
+```
+
+```{r, eval=FALSE, cache=TRUE}
+#We now move onto the best maxnode parameter. After running the gridsearch multiple times, we determined that the optimal value lie between 60 and 70.
+
+store_maxnode <- list()
+tuneGrid <- expand.grid(.mtry = rf_mtry$bestTune$mtry)
+for (maxnodes in c(60: 70)) {
+    set.seed(1234)
+    rf_maxnode <- train(SalePrice~.,
+        data = train,
+        method = "rf",
+        metric = "adj.r.squared",
+        tuneGrid = tuneGrid,
+        trControl = trControl,
+        importance = TRUE,
+        nodesize = 14,
+        maxnodes = maxnodes,
+        ntree = 300)
+    current_iteration <- toString(maxnodes)
+    store_maxnode[[current_iteration]] <- rf_maxnode
+}
+results_mtry <- resamples(store_maxnode)
+summary(results_mtry)
+
+#Best maxnode by RMSE: 68
+```
+
+
+```{r, eval=FALSE, cache=TRUE}
+#Search for the best ntree parameter value;
+store_maxtrees <- list()
+for (ntree in c(250, 300, 350, 400, 450, 500, 550, 600, 800, 1000, 2000)) {
+    set.seed(5678)
+    rf_maxtrees <- train(SalePrice~.,
+        data = train,
+        method = "rf",
+        metric = "adj.r.squared",
+        tuneGrid = tuneGrid,
+        trControl = trControl,
+        importance = TRUE,
+        nodesize = 14,
+        maxnodes = 68,
+        ntree = ntree)
+    key <- toString(ntree)
+    store_maxtrees[[key]] <- rf_maxtrees
+}
+results_tree <- resamples(store_maxtrees)
+summary(results_tree)
+```
+Thus the parameters of our optimal RandomForest-Model are the following:
+
+```{r, include=TRUE, echo = FALSE }
+optimal_par_rf <- matrix(c(113, 68,300), ncol = 3)
+colnames(optimal_par_rf) <- c("mtry","maxnode","ntree")
+rownames(optimal_par_rf) <- ""
+optimal_par_rf <- kable(as.data.frame(optimal_par_rf))
+optimal_par_rf
+```
+
+
+```{r, cache=TRUE}
+#We have our optimal model with parameters mtry = 113, maxnode = 68 and ntree = 300. We train it:
+tuneGrid <- expand.grid(.mtry = 113)
+modfit_rf <- train(SalePrice~.,
+    train,
+    method = "rf",
+    metric = "adj.r.squared",
+    tuneGrid = tuneGrid,
+    trControl = trControl,
+    importance = TRUE,
+    nodesize = 14,
+    ntree = 300,
+    maxnodes = 68)
+```
+
+And the scores of the optimal model on the testing set:
+```{r, include=TRUE, fig.align = "center", echo=FALSE}
+prediction <- predict(modfit_rf, test)
+
+score_RF <- R2_Score(y_pred = prediction, y_true = log(test$SalePrice))
+rmse_RF <- RMSE(prediction,log(test$SalePrice))
+scores_rf <- kable(data.frame("R^2" = score_RF, "RMSE" = rmse_RF))
+scores_rf
+```
+
+We now move onto our next nonlinear regressor.
+
+### 2. Gradient Boosting
+We use here the Global boosting Machine Regressor from the gbm library. 
+
+Whereas random forests build an ensemble of deep independent trees, GBMs build an ensemble of shallow and weak successive trees with each tree learning and improving on the previous. When combined, these many weak successive trees produce a powerful “committee”. Similarly, we first train the model with the default values and then improve it through successive grid searches.
+```{r}
+library(gbm)
+set.seed(123)
+
+gbm.default <- gbm(SalePrice ~ .,
+  distribution = "gaussian",
+  data = train,
+  )  
+
+print(gbm.default)
+print(head(summary(gbm.default),25))
+
+#Here, we are given the informations that R uses a default setting of 100 as number of trees and that is considers only 25 variables to be really influent, which is a surprisingly low number. For this reason, we investigate deeper the characteristics of the gbm regressor.
+```
+
+
+```{r}
+print(attributes(gbm.default))
+print(gbm.default$interaction.depth)
+print(gbm.default$shrinkage)
+print(gbm.default$bag.fraction)
+
+#This outputs show us that dhe default depth of each tree (interaction.depth) is 1, which means we are ensembling a bunch of stumps. This is obviously not appropriate in our model with $67$ variables, we are here in a case of underfitting. Therefore, we will again here tune the parameters in the hope that it will effectively improve our gbm model.
+#Note that the last line gives the proportion of the data used to build the tree at the next step.
+```
+
+
+We are going to search across 81 models with varying learning rates and tree depth. We vary the minimum number of observations allowed in the trees terminal nodes (n.minobsinnode) and introduce stochastic gradient descent by allowing bag.fraction < 1.
+
+```{r}
+hyper_grid <- expand.grid(
+  shrinkage = c(.01, .1, .3),
+  interaction.depth = c(1, 3, 5),
+  n.minobsinnode = c(5, 10, 15),
+  bag.fraction = c(.65, .8, 1), 
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+# total number of combinations
+nrow(hyper_grid)
+## [1] 81
+```
+
+```{r, cache=TRUE, eval=FALSE}
+# randomize data
+random_index <- sample(1:nrow(train), nrow(train))
+random_train <- train[random_index, ]
+
+# grid search 
+for(i in 1:nrow(hyper_grid)) {
+  
+  # reproducibility
+  set.seed(123)
+  
+  # train model
+  gbm.tune <- gbm(SalePrice ~ .,
+    distribution = "gaussian",
+    data = random_train,
+    n.trees = 5000,
+    interaction.depth = hyper_grid$interaction.depth[i],
+    shrinkage = hyper_grid$shrinkage[i],
+    n.minobsinnode = hyper_grid$n.minobsinnode[i],
+    bag.fraction = hyper_grid$bag.fraction[i],
+    train.fraction = .75,
+    n.cores = NULL, # will use all cores by default
+    verbose = FALSE
+  )
+  
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(gbm.tune$valid.error)
+  hyper_grid$min_RMSE[i] <- sqrt(min(gbm.tune$valid.error))
+}
+
+hyper_grid %>% 
+  dplyr::arrange(min_RMSE) %>%
+  head(10)
+```
+
+```{r}
+# modify hyperparameter grid
+hyper_grid <- expand.grid(
+  shrinkage = c(.01, .05, .1),
+  interaction.depth = c(3, 5, 7),
+  n.minobsinnode = c(5, 7, 10),
+  bag.fraction = c(.65, .8, 1), 
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+# total number of combinations
+nrow(hyper_grid)
+## [1] 81
+```
+
+```{r, cache=TRUE, eval=FALSE}
+# grid search 
+for(i in 1:nrow(hyper_grid)) {
+  
+  # reproducibility
+  set.seed(123)
+  
+  # train model
+  gbm.tune <- gbm(SalePrice ~ .,
+    distribution = "gaussian",
+    data = random_train,
+    n.trees = 6000,
+    interaction.depth = hyper_grid$interaction.depth[i],
+    shrinkage = hyper_grid$shrinkage[i],
+    n.minobsinnode = hyper_grid$n.minobsinnode[i],
+    bag.fraction = hyper_grid$bag.fraction[i],
+    train.fraction = .75,
+    n.cores = NULL, # will use all cores by default
+    verbose = FALSE
+  )
+  
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(gbm.tune$valid.error)
+  hyper_grid$min_RMSE[i] <- sqrt(min(gbm.tune$valid.error))
+}
+
+hyper_grid %>% 
+  dplyr::arrange(min_RMSE) %>%
+  head(10)
+```
+
+Multiple rounds of grid search indicated that the last best model we found had the following parameter:
+
+```{r, include=TRUE, echo=FALSE}
+optimal_par_gb <- matrix(c(2078, 7,0.01, 5, 0.8), ncol = 5)
+colnames(optimal_par_gb) <- c("ntrees","interaction.depth","shrinkage", "n.minobsinnode", "bag.fraction")
+optimal_par_gb <- kable(as.data.frame(optimal_par_gb))
+optimal_par_gb
+```
+
+```{r}
+set.seed(123)
+
+# train GBM model
+gbm.final <- gbm(SalePrice ~ .,
+  distribution = "gaussian",
+  data = train,
+  n.trees = 2078,
+  interaction.depth = 7,
+  shrinkage = 0.01,
+  n.minobsinnode = 5,
+  bag.fraction = 0.8, 
+  train.fraction = 1,
+  n.cores = NULL, # will use all cores by default
+  verbose = FALSE
+  )
+```
+
+```{r, include=TRUE, echo=FALSE}
+pred <- predict(gbm.final, n.trees = gbm.final$n.trees, test)
+
+rmse_GB <- RMSE(pred, log(test$SalePrice))
+score_GB <- R2_Score(pred, log(test$SalePrice))
+
+scores_gb <- matrix(c(score_GB, rmse_GB), ncol = 2)
+colnames(scores_gb) <- c("R2-Score", "RMSE")
+rownames(scores_gb) <- ""
+scores_gb <- as.data.frame(scores_gb)
+kable(scores_gb)
+```
+
+We see here a significant improvement from the Random Forest Model since we obtain a R2 score of $0.918$  and an RMSE of $0.116$ on the testing set. We will now look at our final non-linear regressor: Extreme Gradient Boosting Regressor.
+
+### 3. XGBoost Regression
+XGBoost is an optimized distributed gradient boosting method designed to be highly efficient, flexible and portable. It implements algorithms under the Gradient Boosting framework. XGBoost provides a parallel tree boosting (also known as GBDT, GBM) that solve many data science problems in a fast and accurate way. 
+Since XGBoost only works with matrices containing only numerical variables, we will need to hot-encode our data. For this, we use the vtreat package.
+
+```{r}
+library(xgboost)
+library(vtreat)
+library(magrittr)
+library(dplyr)
+
+# variable names
+features <- setdiff(names(train), "SalePrice")
+
+# Create the treatment plan from the training data
+treatplan <- designTreatmentsZ(train, features, verbose = FALSE)
+
+# Get the "clean" variable names from the scoreFrame
+new_vars <- treatplan %>%
+  use_series(scoreFrame) %>%        
+  filter(code %in% c("clean", "lev")) %>% 
+  use_series(varName)     
+
+# Prepare the training data
+features_train <- prepare(treatplan, train, varRestriction = new_vars) %>% as.matrix()
+response_train <- train$SalePrice
+
+# Prepare the test data
+features_test <- prepare(treatplan, test, varRestriction = new_vars) %>% as.matrix()
+response_test <- test$SalePrice
+
+# dimensions of one-hot encoded data
+dim(features_train)
+## [1] 1095  249
+dim(features_test)
+## [1] 365 249
+```
+
+```{r, cache=TRUE, eval=FALSE}
+# reproducibility
+set.seed(123)
+
+xgb.default <- xgb.cv(
+  data = features_train,
+  label = response_train,
+  nrounds = 1000,
+  nfold = 5,
+  objective = "reg:linear",  # for regression models
+  verbose = 0               # silent,
+)
+
+print(xgb.default)
+```
+We create our hyperparameter search grid along with columns to dump our results in. Here, we create a pretty large search grid consisting of 16 different hyperparameter combinations to model.
+
+```{r}
+# create hyperparameter grid
+hyper_grid <- expand.grid(
+  max_depth = c(6,7,8,9),
+  min_child_weight = c(2, 2.3, 2.5,2.7),
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+nrow(hyper_grid)
+## [1] 576
+```
+
+```{r, cache=TRUE, eval=FALSE}
+# grid search 
+for(i in 1:nrow(hyper_grid)) {
+  
+  # create parameter list
+  params <- list(
+    max_depth = hyper_grid$max_depth[i],
+    min_child_weight = hyper_grid$min_child_weight[i]
+  )
+  
+  # reproducibility
+  set.seed(123)
+  
+  # train model
+  xgb.tune <- xgb.cv(
+    params = params,
+    data = features_train,
+    label = response_train,
+    nrounds = 5000,
+    nfold = 5,
+    objective = "reg:linear",  # for regression models
+    verbose = 0,               # silent,
+    early_stopping_rounds = 10 # stop if no improvement for 10 consecutive trees
+  )
+  
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(xgb.tune$evaluation_log$test_rmse_mean)
+  hyper_grid$min_RMSE[i] <- min(xgb.tune$evaluation_log$test_rmse_mean)
+}
+
+hyper_grid %>%
+  dplyr::arrange(min_RMSE) %>%
+  head(10)
+```
+ 
+We train the result of our search on our train dataset. We obtain the parameters
+
+```{r, include=TRUE, echo=FALSE}
+par_xgb <- kable(data.frame("max_depth" = 7,"min_child_weight" =  2.3, "eta" = 0.01, "nrounds" = 5000)) 
+par_xgb
+```
+
+
+```{r}
+xgb.final <- xgboost(
+  params = list(max_depth=7, min_child_weight = 2.3, eta=0.01),
+  data = features_train,
+  label= response_train,
+  nrounds = 5000,
+  objective="reg:linear",
+  verbose=0)
+```
+
+Our scores with the XGBoost Regressor on the testing set are:
+```{r, include=TRUE, echo=FALSE}
+y_pred <- predict(xgb.final, features_test)
+score_XGB <- R2_Score(y_pred, log(test$SalePrice))
+rmse_XGB <- RMSE(y_pred, log(test$SalePrice))
+display_score_xgb <- kable(data.frame("R2-Score" = score_XGB, "RMSE" = rmse_XGB)) 
+display_score_xgb
+```
+
+On the testing set, the XGBoost model returns an $R^2$ of $0.907$. We need to be aware that hyperparametertuning for boosting method is very cumbersome, and time-consuming, which is why we did not push it until we'd receive an optimal model. Had we done that, it is very likely that our optimal XGBoost Model would have outperformed all others.
+
+# Final Models 
+
+Let's summarize our results:
+
+```{r, include=TRUE, echo=FALSE, fig.align='center'}
+kable(data.frame("Methods" =  c("Lasso", "PLS", "RandomForest", "Gradient Boosting", "XGBoost"),
+           "R2" = c(score_lasso, score_pls, score_RF, score_GB, score_XGB), 
+           "RMSE" = c(rmse_lasso, rmse_pls, rmse_RF, rmse_GB, rmse_XGB)))
+```
+
+The three best models are Lasso (with interactions), PLS (with interactions) and Gradient Boosting. We will continue our analyses only with these models. 
+
+## I. Outliers
+
+Since the Gradient Boosting algorithm is not very sensitive to outliers we will not study the presence of outliers for this model. So the final score for this model is: $R^2$ = 0.907.
+
+As to the Lasso and PLS models, even though the BIC model is not the best performing one, we will check the presence of outliers based on the BIC model since there is no command in R to do a proper check of outliers for the LASSO and PLS models. 
+
+```{r}
+library(car)
+par(mfrow=c(4,1), mar=c(1,1,1,1))
+influenceIndexPlot(mod_BIC,vars="Cook")
+influenceIndexPlot(mod_BIC,vars="Studentized")
+influenceIndexPlot(mod_BIC,vars="hat")
+```
+
+- **Cook's distance**: no observation has a value higher than 1, so according to this criterion we shouldn't remove any observation
+- **Studentized residuals**: many values are regression outliers,  especially observation 199 and 596. 
+- **Hat-values**: there is no observation higher than 0.5, so no observation has a large influence on its own estimation. 
+
+```{r}
+outlierTest(mod_BIC)
+```
+
+- By conducting an **outlier test**, we notice that observations 199, 596, 336, 633, 618, 323 and 692 are outliers and therefore should be removed. 
+
+Even though, an outlier on one regression model is not necessarily an outlier on another regression model, we could try to remove these observations in our Lasso and PLS models, and then check the new performance. 
+
+**LASSO adjusted**
+```{r}
+# Fitting part
+train_noOutlier <- train[-c(199, 596, 336, 618, 323,692),]
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+lasso3 <- train(SalePrice ~ .+ OverallQual*(Functional+Neighborhood) + GrLivArea*(MSSubClass+LandContour+ExterCond+BsmtFinType1), train_noOutlier, method='glmnet', tuneGrid=expand.grid(alpha=1,lambda=seq(0.001,0.010,0.001)),trControl=custom)
+
+lasso3
+```
+
+
+```{r}
+# Summary of the coefficients
+coeffs <- coef(lasso3$finalModel, lasso3$bestTune$lambda)
+Beta <- c()
+row_names <- c()
+count <- 0
+for (i in 1:length(coeffs)){
+  if (coeffs[i] !=0){
+    row_names <- c(row_names, rownames(coeffs)[i])
+    Beta <- c(Beta, coeffs[i])
+    count <- count + 1
+  }
+}
+
+coef_table_lasso2 <- data.frame("Beta" = Beta, row.names = row_names)
+coef_table_lasso2 <- coef_table_lasso2[order(-coef_table_lasso2$Beta),,drop=FALSE]
+(coef_table_lasso2[1:10,,drop=FALSE])
+```
+
+This updated model returns an R2 on the training set of $0.923$ and an RMSE of $0.1095$ for $\lambda = 0.002$. By looking at the coefficients, it seems that the interaction term MSSubClass40:GrLivArea is quite influent on the SalePrice, as well as Neighborhood.
+
+```{r}
+# Predictions
+R2_Score(predict(lasso3, test), log(test$SalePrice))
+RMSE(predict(lasso3, test), log(test$SalePrice))
+```
+On the testing set, the R2 score is about $0.925$.
+
+**PLS adjusted**
+
+```{r}
+# Model fitting
+custom = trainControl(method='repeatedcv',number=10,repeats=5)
+
+pls3 <- train(SalePrice ~ .+ OverallQual*(Functional+Neighborhood) + GrLivArea*(MSSubClass+LandContour+ExterCond+BsmtFinType1), train_noOutlier, method='pls', tuneLength=20, trControl=custom)
+pls3
+```
+```{r}
+plot(pls3)
+```
+
+The lasso model maximizes the R2 score on the training set when n_component = 9. It gives an R2 score of $0.921$.
+
+```{r}
+# Predictions
+R2_Score(predict(pls3, test), log(test$SalePrice))
+RMSE(exp(predict(pls3, test)), test$SalePrice)
+```
+
+On the testing set, the R2 score is about $0.924$. 
+
+**Summary**
+
+```{r, include=TRUE, echo=FALSE, fig.align='center'}
+kable(data.frame("Methods" = c("Lasso", "PLS"),
+                 "R2 Score" = c(R2_Score(predict(lasso3, test), log(test$SalePrice)),R2_Score(predict(pls3, test), log(test$SalePrice))),
+                 "RMSE"=c(RMSE(predict(lasso3, test), log(test$SalePrice)),RMSE(predict(pls3, test),log(test$SalePrice)))))
+```
+
+Based on these results, we have decided to keep the lasso model. 
+
+## II. Model validation
+
+Let's check if the assumptions of the lasso model are met. 
+
+```{r, include=TRUE, echo=FALSE, fig.align="center", out.width = '50%'}
+par(mfrow=c(1,2))
+y_pred <- predict(lasso3, test)
+residuals <- log(test$SalePrice) - y_pred
+qqnorm(residuals)
+qqline(residuals)
+
+plot(y_pred, residuals)
+abline(0,0, col='red')
+```
+- The residuals almost fall on the line (except for the tails), therefore they seem to follow a normal distribution. 
+- The residuals seem well spread around 0.
+
+```{r Breush Pagan test}
+residuals_2 <- residuals^2
+data_test <- data.frame("Residuals_2" = residuals_2, "fitted" = y_pred)
+bp_test <- lm(Residuals_2 ~ fitted, data=data_test)
+R2 <- summary(bp_test)$r.squared
+F_stat <- R2/((1-R2)/(length(residuals_2)-2))
+F_stat
+quantile <- qf(0.975, 1, length(residuals_2)-2)
+quantile
+F_stat > quantile
+```
+- According to a manually built Breush Pagan test, the variance of the residuals is homoscedastic (at the risk level $\alpha = 0.05$)
+
+```{r Durbin Watson test}
+residuals_bis <- residuals[-1]
+residuals_bis2 <- residuals[-length(residuals)]
+
+d = sum((residuals_bis - residuals_bis2)^2)/sum(residuals_2)
+d
+```
+
+- As to autocorrelation, the value of the Durbin Watson test is around 2, which means that there is no correlation between the residuals. 
+
+Our lasso model is therefore **valid**. Let's recap the values of the RMSE and R2, this time by using the real values of the SalePrice (not the log_SalePrice).
+
+```{r, include=TRUE, echo=FALSE, fig.align="center", out.width = '50%'}
+kable(data.frame("Final model" = c("Lasso"), 
+           "RMSE" = RMSE(exp(predict(lasso3, test)), test$SalePrice),
+           "R2" = R2_Score(exp(predict(lasso3, test)), test$SalePrice)))
+```
+
+# Discussion
+
+Overall, we can point out several ways this analysis could be taken further. 
+
+First, it would be more appropriate to perform the outlier detection directly on the Lasso-model instead of using the BIC-model.
+
+Also, we could not tune the XGBoost regressor as much as we would have liked, because of the huge amount of time it takes to do it. Therefore, a more advanced tuning of the hyperparameterswe would surely give a much better performing XGBoost model, which could maybe outperform the Lasso model.
+
+Another interesting direction for further research would be to perform different kernelized regression models such as the KernelRidge regression. 
+
+Finally, a more advanced study of the effects of the interactions between the variables and the SalePrice would probably improve the model as well. 
+
+
+
